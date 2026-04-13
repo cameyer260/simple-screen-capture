@@ -1,7 +1,8 @@
 #!/usr/bin/python3
 """Resizable capture-region selector.
 Prints "X Y W H" on confirm, exits silently on cancel.
-Usage: capture-region [screenshot|gif|screen|audio]
+Usage: capture-region [screenshot|gif|screen|audio] [x y w h]
+       The optional x y w h pre-positions the window to the last used region.
 """
 import gi, sys
 gi.require_version('Gtk', '3.0')
@@ -11,16 +12,23 @@ EDGE     = 22   # px from edge that activates resize drag
 DELAY_MS = 160  # ms to wait after hiding so compositor clears the window
 
 class RegionSelector(Gtk.Window):
-    def __init__(self, mode='screenshot'):
+    def __init__(self, mode='screenshot', last_region=None):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
-        self.mode = mode
+        self.mode        = mode
+        self.last_region = last_region
 
         self.set_decorated(False)
         self.set_resizable(True)
-        self.set_default_size(720, 450)
-        self.set_position(Gtk.WindowPosition.CENTER)
         self.set_keep_above(True)
         self.set_skip_taskbar_hint(True)
+
+        if last_region:
+            x, y, w, h = last_region
+            self.set_default_size(w, h)
+            self.connect('realize', lambda *_: self.move(x, y))
+        else:
+            self.set_default_size(720, 450)
+            self.set_position(Gtk.WindowPosition.CENTER)
 
         screen = self.get_screen()
         visual = screen.get_rgba_visual()
@@ -172,7 +180,14 @@ class RegionSelector(Gtk.Window):
 
 
 if __name__ == '__main__':
-    mode = sys.argv[1] if len(sys.argv) > 1 else 'screenshot'
-    win  = RegionSelector(mode)
+    args = sys.argv[1:]
+    mode = args[0] if args else 'screenshot'
+    last = None
+    if len(args) == 5:
+        try:
+            last = tuple(int(a) for a in args[1:])
+        except ValueError:
+            pass
+    win = RegionSelector(mode, last)
     win.show_all()
     Gtk.main()

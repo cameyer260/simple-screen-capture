@@ -196,10 +196,12 @@ do_screenshot() {
 
   local rfile; rfile=$(mktemp /tmp/capture-region-XXXXXX)
   trap 'rm -f "$rfile"' RETURN
-  /usr/bin/python3 /usr/bin/capture-region screenshot > "$rfile"
+  local last_args=(); [[ -f "$CONFIG_DIR/last_region_screenshot" ]] && read -ra last_args < "$CONFIG_DIR/last_region_screenshot"
+  /usr/bin/python3 /usr/bin/capture-region screenshot "${last_args[@]}" > "$rfile"
   local region; region=$(cat "$rfile")
   [[ -z "$region" ]] && return
   local X Y W H; read -r X Y W H <<< "$region"
+  echo "$X $Y $W $H" > "$CONFIG_DIR/last_region_screenshot"
 
   maim -g "${W}x${H}+${X}+${Y}" "$tmp" 2>/dev/null || return
 
@@ -231,10 +233,12 @@ do_gif() {
 
   local rfile; rfile=$(mktemp /tmp/capture-region-XXXXXX)
   trap 'rm -f "$rfile"' RETURN
-  /usr/bin/python3 /usr/bin/capture-region gif > "$rfile"
+  local last_args=(); [[ -f "$CONFIG_DIR/last_region_gif" ]] && read -ra last_args < "$CONFIG_DIR/last_region_gif"
+  /usr/bin/python3 /usr/bin/capture-region gif "${last_args[@]}" > "$rfile"
   local region; region=$(cat "$rfile")
   [[ -z "$region" ]] && return
   local X Y W H; read -r X Y W H <<< "$region"
+  echo "$X $Y $W $H" > "$CONFIG_DIR/last_region_gif"
   [[ $W -lt 2 || $H -lt 2 ]] && return
 
   ffmpeg -f x11grab -r 15 -s "${W}x${H}" -i "${DISPLAY}+${X},${Y}" \
@@ -270,10 +274,12 @@ do_record() {
 
   local rfile; rfile=$(mktemp /tmp/capture-region-XXXXXX)
   trap 'rm -f "$rfile"' RETURN
-  /usr/bin/python3 /usr/bin/capture-region "$audio" > "$rfile"
+  local last_args=(); [[ -f "$CONFIG_DIR/last_region_screen" ]] && read -ra last_args < "$CONFIG_DIR/last_region_screen"
+  /usr/bin/python3 /usr/bin/capture-region "$audio" "${last_args[@]}" > "$rfile"
   local region; region=$(cat "$rfile")
   [[ -z "$region" ]] && return
   local X Y W H; read -r X Y W H <<< "$region"
+  echo "$X $Y $W $H" > "$CONFIG_DIR/last_region_screen"
   [[ $W -lt 2 || $H -lt 2 ]] && return
 
   local -a args=(-f x11grab -r 30 -s "${W}x${H}" -i "${DISPLAY}+${X},${Y}")
