@@ -14,8 +14,15 @@ curl -fsSL "https://github.com/${REPO}/releases/latest/download/$(
 echo "Installing..."
 sudo apt install -y "$TMP"
 
-echo "Setting up shortcut..."
-simple-screen-capture --setup
+if [[ -n "${CAPTURE_CONFIG:-}" ]]; then
+  echo "Setting up shortcut..."
+  simple-screen-capture --setup-shortcut
+  echo "Importing shared R2 config..."
+  simple-screen-capture --import-config "$CAPTURE_CONFIG"
+else
+  echo "Setting up shortcut..."
+  simple-screen-capture --setup
+fi
 
 echo ""
 echo "Done. Press Ctrl+Shift+Alt+4 to open the capture panel."

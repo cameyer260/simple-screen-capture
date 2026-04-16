@@ -28,6 +28,20 @@ fi
 # ── notify helper ─────────────────────────────────────────────────────────────
 say() { command -v notify-send &>/dev/null && notify-send "$1" "$2" -t "${3:-3000}" || true; }
 
+# ── upload helper ─────────────────────────────────────────────────────────────
+upload_and_xclip() {
+  local file="$1" label="$2"
+  local url err
+  say "$label" "Uploading…" 20000
+  if ! url=$(/usr/bin/python3 /usr/bin/capture-upload "$file" 2>/tmp/capture-upload.err); then
+    err=$(cat /tmp/capture-upload.err 2>/dev/null)
+    say "$label" "Upload failed — ${err:-unknown error}" 8000
+    return 1
+  fi
+  printf '%s' "$url" | xclip -selection clipboard
+  say "$label" "URL copied — $url" 6000
+}
+
 # ── stop panel ────────────────────────────────────────────────────────────────
 wait_for_stop() {
   sleep 0.4
@@ -84,18 +98,24 @@ do_screenshot() {
 
   cp "$tmp" "$out"
 
-  if [[ "$clipboard_mode" == "base64" ]]; then
-    base64 -w 0 "$tmp" | xclip -selection clipboard
-    say "Screenshot" "Base64 copied — ${comp}B (−${pct}%)"
-  else
-    xclip -selection clipboard -t image/png < "$tmp"
-    say "Screenshot" "Image copied — ${comp}B (−${pct}%)"
-  fi
+  case "$clipboard_mode" in
+    url)
+      upload_and_xclip "$out" "Screenshot"
+      ;;
+    base64)
+      base64 -w 0 "$tmp" | xclip -selection clipboard
+      say "Screenshot" "Base64 copied — ${comp}B (−${pct}%)"
+      ;;
+    *)
+      xclip -selection clipboard -t image/png < "$tmp"
+      say "Screenshot" "Image copied — ${comp}B (−${pct}%)"
+      ;;
+  esac
 }
 
 # ── gif ───────────────────────────────────────────────────────────────────────
 do_gif() {
-  local smart_slice="$1" threshold="$2" X="$3" Y="$4" W="$5" H="$6"
+  local clipboard_mode="$1" smart_slice="$2" threshold="$3" X="$4" Y="$5" W="$6" H="$7"
   local tmp palette ts out
   tmp=$(mktemp /tmp/capture-XXXXXX.mp4)
   palette=$(mktemp /tmp/capture-XXXXXX.png)
@@ -126,12 +146,16 @@ do_gif() {
   rm -f "$tmp" "$palette"
 
   local size; size=$(du -h "$out" | cut -f1)
-  say "GIF saved" "${size} — $(basename "$out")" 5000
+  if [[ "$clipboard_mode" == "url" ]]; then
+    upload_and_xclip "$out" "GIF ($size)"
+  else
+    say "GIF saved" "${size} — $(basename "$out")" 5000
+  fi
 }
 
 # ── screencast ────────────────────────────────────────────────────────────────
 do_record() {
-  local audio="$1" smart_slice="$2" threshold="$3" X="$4" Y="$5" W="$6" H="$7"
+  local audio="$1" clipboard_mode="$2" smart_slice="$3" threshold="$4" X="$5" Y="$6" W="$7" H="$8"
   local ts out
   ts=$(date +%Y-%m-%d_%H-%M-%S)
   out="$SCREENCASTS_DIR/${ts}.mp4"
@@ -160,13 +184,114 @@ do_record() {
   kill "$fpid" 2>/dev/null; wait "$fpid" 2>/dev/null || true
 
   local size; size=$(du -h "$out" | cut -f1)
-  say "Screencast saved" "${size} — $(basename "$out")" 5000
+  if [[ "$clipboard_mode" == "url" ]]; then
+    upload_and_xclip "$out" "Screencast ($size)"
+  else
+    say "Screencast saved" "${size} — $(basename "$out")" 5000
+  fi
 
   [[ "$smart_slice" == "1" ]] && do_smart_slice "$out" "$ts" "$threshold"
 }
 
 # ── setup mode ────────────────────────────────────────────────────────────────
-do_setup() {
+do_setup_s3() {
+  local conf="$CONFIG_DIR/s3.conf"
+  local BOLD="" DIM="" CYAN="" GREEN="" YELLOW="" RESET=""
+  if [[ -t 1 ]]; then
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; CYAN=$'\033[36m'
+    GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+  fi
+
+  echo ""
+  echo "${CYAN}═══════════════════════════════════════════════════════════════${RESET}"
+  echo "${BOLD}  S3 / R2 upload config${RESET} ${DIM}(optional — for URL clipboard mode)${RESET}"
+  echo "${CYAN}═══════════════════════════════════════════════════════════════${RESET}"
+  echo "  Copy shareable URLs instead of image bytes. Works with AWS S3,"
+  echo "  Cloudflare R2, Backblaze B2, MinIO — anything S3-compatible."
+  echo "  ${DIM}Secrets saved to ${conf} (chmod 600).${RESET}"
+  echo ""
+
+  local configure
+  read -r -p "  Configure S3/R2 upload now? [y/N]: " configure </dev/tty
+  if [[ ! "$configure" =~ ^[Yy]$ ]]; then
+    echo "  ${DIM}Skipping. Re-run \`simple-screen-capture --setup\` any time.${RESET}"
+    return 0
+  fi
+
+  local cur_endpoint="" cur_bucket="" cur_region="auto"
+  local cur_key="" cur_secret="" cur_prefix="" cur_public="" cur_acl=""
+  if [[ -f "$conf" ]]; then
+    echo "  ${DIM}(existing config detected — press Enter to keep each value)${RESET}"
+    # shellcheck disable=SC1090
+    source "$conf" 2>/dev/null || true
+    cur_endpoint="${S3_ENDPOINT:-}"
+    cur_bucket="${S3_BUCKET:-}"
+    cur_region="${S3_REGION:-auto}"
+    cur_key="${S3_ACCESS_KEY_ID:-}"
+    cur_secret="${S3_SECRET_ACCESS_KEY:-}"
+    cur_prefix="${S3_PATH_PREFIX:-}"
+    cur_public="${S3_PUBLIC_URL_BASE:-}"
+    cur_acl="${S3_ACL:-}"
+  fi
+  echo ""
+
+  local _ask_var _ask_label _ask_default _ask_hidden _ask_value _ask_display
+  prompt_for() {
+    _ask_var="$1"; _ask_label="$2"; _ask_default="$3"; _ask_hidden="${4:-}"
+    if [[ -n "$_ask_default" ]]; then
+      if [[ -n "$_ask_hidden" ]]; then
+        _ask_display="${YELLOW}[keep existing]${RESET}"
+      else
+        _ask_display="${YELLOW}[${_ask_default}]${RESET}"
+      fi
+      printf '  %s %s: ' "$_ask_label" "$_ask_display"
+    else
+      printf '  %s: ' "$_ask_label"
+    fi
+    if [[ -n "$_ask_hidden" ]]; then
+      read -r -s _ask_value </dev/tty; echo ""
+    else
+      read -r _ask_value </dev/tty
+    fi
+    printf -v "$_ask_var" '%s' "${_ask_value:-$_ask_default}"
+  }
+
+  prompt_for S3_ENDPOINT            "Endpoint URL"                "$cur_endpoint"
+  prompt_for S3_BUCKET              "Bucket name"                 "$cur_bucket"
+  prompt_for S3_REGION              "Region"                      "$cur_region"
+  prompt_for S3_ACCESS_KEY_ID       "Access Key ID"               "$cur_key"
+  prompt_for S3_SECRET_ACCESS_KEY   "Secret Access Key"           "$cur_secret" hidden
+  prompt_for S3_PATH_PREFIX         "Path prefix (e.g. captures/)" "$cur_prefix"
+  prompt_for S3_PUBLIC_URL_BASE     "Public URL base (CDN/domain)" "$cur_public"
+  prompt_for S3_ACL                 "ACL (blank=R2, public-read=S3)" "$cur_acl"
+
+  if [[ -z "$S3_ENDPOINT" || -z "$S3_BUCKET" || -z "$S3_ACCESS_KEY_ID" || -z "$S3_SECRET_ACCESS_KEY" ]]; then
+    echo ""
+    echo "  ${YELLOW}Required field empty — S3 config NOT saved.${RESET}"
+    return 0
+  fi
+
+  mkdir -p "$CONFIG_DIR"
+  (umask 077; cat > "$conf" <<EOF
+# simple-screen-capture S3/R2 upload config
+# Regenerate with: simple-screen-capture --setup
+S3_ENDPOINT=$S3_ENDPOINT
+S3_BUCKET=$S3_BUCKET
+S3_REGION=$S3_REGION
+S3_ACCESS_KEY_ID=$S3_ACCESS_KEY_ID
+S3_SECRET_ACCESS_KEY=$S3_SECRET_ACCESS_KEY
+S3_PATH_PREFIX=$S3_PATH_PREFIX
+S3_PUBLIC_URL_BASE=$S3_PUBLIC_URL_BASE
+S3_ACL=$S3_ACL
+EOF
+  )
+  chmod 600 "$conf"
+  echo ""
+  echo "  ${GREEN}✓${RESET} Saved ${conf}"
+  echo "  ${DIM}Pick 'URL' in the capture panel's clipboard selector.${RESET}"
+}
+
+do_setup_shortcut() {
   echo "Setting up simple-screen-capture shortcut (Ctrl+Shift+Alt+4)..."
 
   local binding="<Primary><Shift><Alt>4"
@@ -216,11 +341,120 @@ do_setup() {
   echo "Done. Press Ctrl+Shift+Alt+4 to open the capture panel."
 }
 
+do_setup() {
+  do_setup_shortcut
+  do_setup_s3
+}
+
+# ── export / import encrypted config ──────────────────────────────────────────
+do_export_config() {
+  local conf="$CONFIG_DIR/s3.conf"
+  if [[ ! -f "$conf" ]]; then
+    echo "capture: no S3 config at $conf — run --setup first" >&2
+    exit 1
+  fi
+  command -v openssl &>/dev/null || { echo "capture: openssl required" >&2; exit 1; }
+
+  local BOLD="" DIM="" YELLOW="" RESET=""
+  if [[ -t 2 ]]; then
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+  fi
+
+  {
+    echo ""
+    echo "${BOLD}Export encrypted R2 config for team sharing${RESET}"
+    echo "${YELLOW}Warning:${RESET} anyone with the passphrase + this ciphertext gets full"
+    echo "R2 credentials (read/write/delete your entire bucket). Use a strong"
+    echo "passphrase, rotate when a teammate leaves, and prefer a path-scoped"
+    echo "R2 API token over a global one."
+    echo ""
+  } >&2
+
+  local pass pass2
+  read -r -s -p "Passphrase (≥12 chars): " pass  </dev/tty; echo "" >&2
+  read -r -s -p "Confirm:                " pass2 </dev/tty; echo "" >&2
+  if [[ "$pass" != "$pass2" ]]; then
+    echo "capture: passphrases don't match" >&2; exit 1
+  fi
+  if (( ${#pass} < 12 )); then
+    echo "capture: passphrase too short (min 12)" >&2; exit 1
+  fi
+
+  export _CAP_PASS="$pass"
+  openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -a -A \
+    -in "$conf" -pass env:_CAP_PASS \
+    || { unset _CAP_PASS; echo "capture: encryption failed" >&2; exit 1; }
+  echo ""
+  unset _CAP_PASS
+
+  {
+    echo "" >&2
+    echo "${DIM}Share the ciphertext above + passphrase with your team (via password manager).${RESET}" >&2
+    echo "${DIM}Teammates install with:${RESET}" >&2
+    echo "" >&2
+    echo "  CAPTURE_CONFIG='<paste-ciphertext>' bash <(curl -fsSL https://github.com/KerryRitter/simple-screen-capture/releases/latest/download/install.sh)" >&2
+  } >&2
+}
+
+do_import_config() {
+  local src="${1:-}"
+  command -v openssl &>/dev/null || { echo "capture: openssl required" >&2; exit 1; }
+
+  local ciphertext
+  if [[ -z "$src" || "$src" == "-" ]]; then
+    echo "Paste encrypted config (single line, press Enter when done):" >&2
+    read -r ciphertext </dev/tty
+  elif [[ "$src" =~ ^https?:// ]]; then
+    command -v curl &>/dev/null || { echo "capture: curl required for URL import" >&2; exit 1; }
+    ciphertext=$(curl -fsSL "$src") || { echo "capture: fetch failed: $src" >&2; exit 1; }
+  elif [[ -f "$src" ]]; then
+    ciphertext=$(cat "$src")
+  elif [[ "$src" =~ ^U2FsdGVkX1 ]]; then
+    # Literal openssl-salted base64 blob (always starts with "Salted__" → U2FsdGVkX1 in b64)
+    ciphertext="$src"
+  else
+    echo "capture: not a URL, file, or ciphertext: $src" >&2; exit 1
+  fi
+
+  local pass
+  if [[ -n "${CAPTURE_PASSPHRASE:-}" ]]; then
+    pass="$CAPTURE_PASSPHRASE"
+  else
+    read -r -s -p "Passphrase: " pass </dev/tty; echo "" >&2
+  fi
+
+  mkdir -p "$CONFIG_DIR"
+  local conf="$CONFIG_DIR/s3.conf"
+  local tmp; tmp=$(mktemp)
+  trap 'rm -f "$tmp"' EXIT
+
+  export _CAP_PASS="$pass"
+  if ! printf '%s\n' "$ciphertext" \
+      | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -a -d \
+          -pass env:_CAP_PASS > "$tmp" 2>/dev/null; then
+    unset _CAP_PASS
+    echo "capture: decryption failed (wrong passphrase or corrupted ciphertext)" >&2
+    exit 1
+  fi
+  unset _CAP_PASS
+
+  if ! grep -q '^S3_ENDPOINT=' "$tmp"; then
+    echo "capture: decrypted content doesn't look like an s3.conf" >&2; exit 1
+  fi
+
+  (umask 077; cp "$tmp" "$conf")
+  chmod 600 "$conf"
+  echo "  ✓ Imported config → $conf" >&2
+}
+
 # ── main ──────────────────────────────────────────────────────────────────────
-if [[ "${1:-}" == "--setup" ]]; then
-  do_setup
-  exit 0
-fi
+case "${1:-}" in
+  --setup)            do_setup;                     exit 0 ;;
+  --setup-shortcut)   do_setup_shortcut;            exit 0 ;;
+  --setup-s3)         do_setup_s3;                  exit 0 ;;
+  --export-config)    do_export_config;             exit 0 ;;
+  --import-config)    do_import_config "${2:-}";    exit 0 ;;
+esac
 
 result=$(/usr/bin/python3 /usr/bin/capture-region 2>/dev/null) || true
 [[ -z "$result" ]] && exit 0
@@ -229,8 +463,8 @@ read -r action clipboard smart_slice threshold X Y W H <<< "$result"
 [[ -z "${H:-}" ]] && exit 0
 
 case "$action" in
-  screenshot) do_screenshot "$clipboard"              "$X" "$Y" "$W" "$H" ;;
-  gif)        do_gif        "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
-  screen)     do_record "no"  "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
-  audio)      do_record "yes" "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
+  screenshot) do_screenshot "$clipboard"                           "$X" "$Y" "$W" "$H" ;;
+  gif)        do_gif        "$clipboard" "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
+  screen)     do_record "no"  "$clipboard" "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
+  audio)      do_record "yes" "$clipboard" "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
 esac

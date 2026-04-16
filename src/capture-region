@@ -44,7 +44,7 @@ def _write(path, value):
 
 def get_clipboard_mode():
     v = _read(CLIP_MODE_FILE, 'base64')
-    return v if v in ('base64', 'binary') else 'base64'
+    return v if v in ('base64', 'binary', 'url') else 'base64'
 
 def get_smart_slice():
     return _read(SMART_SLICE_FILE, '0') == '1'
@@ -223,17 +223,22 @@ class RegionSelector(Gtk.Window):
         lbl.set_name('ctx-lbl')
         self.ctx_box.pack_start(lbl, False, False, 0)
 
-        self._clip_b64_btn = Gtk.Button(label='Base64')
-        self._clip_b64_btn.connect('clicked', lambda *_: self._set_clipboard('base64'))
-        self.ctx_box.pack_start(self._clip_b64_btn, False, False, 0)
-
-        self._clip_bin_btn = Gtk.Button(label='PNG')
-        self._clip_bin_btn.connect('clicked', lambda *_: self._set_clipboard('binary'))
-        self.ctx_box.pack_start(self._clip_bin_btn, False, False, 0)
+        self._clip_buttons = {}
+        for val, label in (('binary', 'Image'), ('base64', 'Base64'), ('url', 'URL')):
+            btn = Gtk.Button(label=label)
+            btn.connect('clicked', lambda _w, v=val: self._set_clipboard(v))
+            self.ctx_box.pack_start(btn, False, False, 0)
+            self._clip_buttons[val] = btn
 
         self._refresh_clipboard_buttons()
 
     def _build_recording_ctx(self):
+        self._url_cb = Gtk.CheckButton(label='Copy URL')
+        self._url_cb.set_name('slice-cb')
+        self._url_cb.set_active(self.clipboard_mode == 'url')
+        self._url_cb.connect('toggled', self._on_url_toggled)
+        self.ctx_box.pack_start(self._url_cb, False, False, 0)
+
         self._slice_cb = Gtk.CheckButton(label='Smart Slice')
         self._slice_cb.set_name('slice-cb')
         self._slice_cb.set_active(self.smart_slice)
@@ -293,12 +298,12 @@ class RegionSelector(Gtk.Window):
         self._refresh_clipboard_buttons()
 
     def _refresh_clipboard_buttons(self):
-        if self.clipboard_mode == 'base64':
-            self._clip_b64_btn.set_name('fmt-active')
-            self._clip_bin_btn.set_name('fmt-btn')
-        else:
-            self._clip_b64_btn.set_name('fmt-btn')
-            self._clip_bin_btn.set_name('fmt-active')
+        for val, btn in self._clip_buttons.items():
+            btn.set_name('fmt-active' if val == self.clipboard_mode else 'fmt-btn')
+
+    def _on_url_toggled(self, cb):
+        # URL on → clipboard_mode='url'; off → revert to 'binary' (recording default)
+        self.clipboard_mode = 'url' if cb.get_active() else 'binary'
 
     def _on_smart_slice_toggled(self, cb):
         self.smart_slice = cb.get_active()

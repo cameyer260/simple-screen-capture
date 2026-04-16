@@ -2,15 +2,19 @@ Package: simple-screen-capture
 Version: 1.0.0
 Architecture: all
 Maintainer: Kerry Ritter <kerry@example.com>
-Depends: rofi, maim, ffmpeg, xclip, optipng, xbindkeys,
+Depends: maim, ffmpeg, xclip, optipng, openssl, curl,
  python3-gi, gir1.2-gtk-3.0, libnotify-bin, x11-utils
 Recommends: pulseaudio-utils
-Description: Screenshot, GIF and screencast capture with a floating menu
- Trigger a floating rofi menu via Ctrl+Shift+Alt+R to:
-  - Take area screenshots copied to clipboard as Base64 or binary PNG
+Description: Screenshot, GIF and screencast capture with an integrated GTK panel
+ Trigger a full-screen capture panel via Ctrl+Shift+Alt+4 to:
+  - Take area screenshots copied to clipboard as Image, Base64, or URL
   - Record area GIFs with palette-optimised colour
   - Record area screencasts as MP4 (with optional audio)
+  - Upload captures to any S3-compatible host (AWS, R2, B2, MinIO)
+    and copy the URL to clipboard instead of image bytes
  .
- All captures use a persistent resizable region selector so the capture
- area is visible before recording begins. Run capture-setup after install
- to wire up the keyboard shortcut.
+ Click-drag anywhere to redraw the region (like gnome-screenshot); drag
+ inside to move; drag edges or corners to resize. The bottom toolbar
+ holds mode tabs, contextual settings, and the capture/cancel buttons.
+ Run `simple-screen-capture --setup` after install to wire up the
+ keyboard shortcut and (optionally) configure S3/R2 upload.

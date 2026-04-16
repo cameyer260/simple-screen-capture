@@ -15,7 +15,7 @@ mkdir -p "/tmp/$PKG/usr/share/doc/simple-screen-capture"
 install -m 755 src/simple-screen-capture    "/tmp/$PKG/usr/bin/simple-screen-capture"
 install -m 755 src/capture-region           "/tmp/$PKG/usr/bin/capture-region"
 install -m 755 src/capture-stop             "/tmp/$PKG/usr/bin/capture-stop"
-install -m 755 src/capture-xbindkeys-start  "/tmp/$PKG/usr/bin/capture-xbindkeys-start"
+install -m 755 src/capture-upload           "/tmp/$PKG/usr/bin/capture-upload"
 
 # Control file (inject version)
 sed "s/^Version: .*/Version: $VERSION/" debian/control > "/tmp/$PKG/DEBIAN/control"
