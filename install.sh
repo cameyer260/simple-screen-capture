@@ -18,4 +18,4 @@ echo "Setting up shortcut..."
 simple-screen-capture --setup
 
 echo ""
-echo "Done. Press Ctrl+Shift+Alt+R to open the capture menu."
+echo "Done. Press Ctrl+Shift+Alt+4 to open the capture panel."

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# simple-screen-capture — screenshot · GIF · screencast with GTK capture menu
+# simple-screen-capture — screenshot · GIF · screencast with integrated GTK capture panel
 
 set -uo pipefail
 
@@ -58,7 +58,6 @@ do_smart_slice() {
   count=$(find "$outdir" -name 'slice_*.png' 2>/dev/null | wc -l)
 
   if (( count == 0 )); then
-    # Fallback: just grab first frame if nothing was detected
     ffmpeg -i "$video" -frames:v 1 "$outdir/slice_0001.png" -loglevel quiet 2>/dev/null || true
     count=1
   fi
@@ -68,21 +67,12 @@ do_smart_slice() {
 
 # ── screenshot ────────────────────────────────────────────────────────────────
 do_screenshot() {
-  local clipboard_mode="$1"
+  local clipboard_mode="$1" X="$2" Y="$3" W="$4" H="$5"
   local tmp ts out
   tmp=$(mktemp /tmp/capture-XXXXXX.png)
   ts=$(date +%Y-%m-%d_%H-%M-%S)
   out="$SCREENSHOTS_DIR/${ts}.png"
   trap 'rm -f "$tmp"' RETURN
-
-  local rfile; rfile=$(mktemp /tmp/capture-region-XXXXXX)
-  trap 'rm -f "$rfile"' RETURN
-  local last_args=(); [[ -f "$CONFIG_DIR/last_region_screenshot" ]] && read -ra last_args < "$CONFIG_DIR/last_region_screenshot"
-  /usr/bin/python3 /usr/bin/capture-region screenshot "${last_args[@]}" > "$rfile"
-  local region; region=$(cat "$rfile")
-  [[ -z "$region" ]] && return
-  local X Y W H; read -r X Y W H <<< "$region"
-  echo "$X $Y $W $H" > "$CONFIG_DIR/last_region_screenshot"
 
   maim -g "${W}x${H}+${X}+${Y}" "$tmp" 2>/dev/null || return
 
@@ -105,22 +95,13 @@ do_screenshot() {
 
 # ── gif ───────────────────────────────────────────────────────────────────────
 do_gif() {
-  local smart_slice="$1"
-  local threshold="$2"
+  local smart_slice="$1" threshold="$2" X="$3" Y="$4" W="$5" H="$6"
   local tmp palette ts out
   tmp=$(mktemp /tmp/capture-XXXXXX.mp4)
   palette=$(mktemp /tmp/capture-XXXXXX.png)
   ts=$(date +%Y-%m-%d_%H-%M-%S)
   out="$SCREENCASTS_DIR/${ts}.gif"
 
-  local rfile; rfile=$(mktemp /tmp/capture-region-XXXXXX)
-  trap 'rm -f "$rfile"' RETURN
-  local last_args=(); [[ -f "$CONFIG_DIR/last_region_gif" ]] && read -ra last_args < "$CONFIG_DIR/last_region_gif"
-  /usr/bin/python3 /usr/bin/capture-region gif "${last_args[@]}" > "$rfile"
-  local region; region=$(cat "$rfile")
-  [[ -z "$region" ]] && return
-  local X Y W H; read -r X Y W H <<< "$region"
-  echo "$X $Y $W $H" > "$CONFIG_DIR/last_region_gif"
   [[ $W -lt 2 || $H -lt 2 ]] && return
 
   ffmpeg -f x11grab -r 15 -s "${W}x${H}" -i "${DISPLAY}+${X},${Y}" \
@@ -140,7 +121,6 @@ do_gif() {
     -filter_complex "fps=15,scale=${W}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
     "$out" -y -loglevel quiet
 
-  # Smart slice runs before temp file cleanup
   [[ "$smart_slice" == "1" ]] && do_smart_slice "$tmp" "$ts" "$threshold"
 
   rm -f "$tmp" "$palette"
@@ -151,9 +131,7 @@ do_gif() {
 
 # ── screencast ────────────────────────────────────────────────────────────────
 do_record() {
-  local audio="$1"
-  local smart_slice="$2"
-  local threshold="$3"
+  local audio="$1" smart_slice="$2" threshold="$3" X="$4" Y="$5" W="$6" H="$7"
   local ts out
   ts=$(date +%Y-%m-%d_%H-%M-%S)
   out="$SCREENCASTS_DIR/${ts}.mp4"
@@ -161,14 +139,6 @@ do_record() {
   local label
   [[ "$audio" == "yes" ]] && label="Recording + Audio" || label="Recording Screen"
 
-  local rfile; rfile=$(mktemp /tmp/capture-region-XXXXXX)
-  trap 'rm -f "$rfile"' RETURN
-  local last_args=(); [[ -f "$CONFIG_DIR/last_region_screen" ]] && read -ra last_args < "$CONFIG_DIR/last_region_screen"
-  /usr/bin/python3 /usr/bin/capture-region "$audio" "${last_args[@]}" > "$rfile"
-  local region; region=$(cat "$rfile")
-  [[ -z "$region" ]] && return
-  local X Y W H; read -r X Y W H <<< "$region"
-  echo "$X $Y $W $H" > "$CONFIG_DIR/last_region_screen"
   [[ $W -lt 2 || $H -lt 2 ]] && return
 
   local -a args=(-f x11grab -r 30 -s "${W}x${H}" -i "${DISPLAY}+${X},${Y}")
@@ -221,13 +191,11 @@ do_setup() {
   done <<< "$cleaned"
 
   if [[ -n "$target_slot" ]]; then
-    # Update the existing slot in-place — keep it in the list, just fix its command/name
     echo "  Found existing slot at ${target_slot} — updating in-place"
     dconf write "${target_slot}name"    "'Simple Screen Capture'"
     dconf write "${target_slot}command" "'/usr/bin/simple-screen-capture'"
     dconf write "${target_slot}binding" "'${binding}'"
   else
-    # No existing slot — add a new one
     local slot_name="simple-screen-capture"
     local slot_path="${base_path}/${slot_name}/"
     local updated=()
@@ -245,7 +213,7 @@ do_setup() {
   fi
 
   echo ""
-  echo "Done. Press Ctrl+Shift+Alt+4 to open the capture menu."
+  echo "Done. Press Ctrl+Shift+Alt+4 to open the capture panel."
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -254,14 +222,15 @@ if [[ "${1:-}" == "--setup" ]]; then
   exit 0
 fi
 
-result=$(/usr/bin/python3 /usr/bin/capture-menu 2>/dev/null) || true
+result=$(/usr/bin/python3 /usr/bin/capture-region 2>/dev/null) || true
 [[ -z "$result" ]] && exit 0
 
-read -r action clipboard smart_slice threshold <<< "$result"
+read -r action clipboard smart_slice threshold X Y W H <<< "$result"
+[[ -z "${H:-}" ]] && exit 0
 
 case "$action" in
-  screenshot) do_screenshot "$clipboard" ;;
-  gif)        do_gif           "$smart_slice" "$threshold" ;;
-  screen)     do_record "no"   "$smart_slice" "$threshold" ;;
-  audio)      do_record "yes"  "$smart_slice" "$threshold" ;;
+  screenshot) do_screenshot "$clipboard"              "$X" "$Y" "$W" "$H" ;;
+  gif)        do_gif        "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
+  screen)     do_record "no"  "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
+  audio)      do_record "yes" "$smart_slice" "$threshold" "$X" "$Y" "$W" "$H" ;;
 esac
