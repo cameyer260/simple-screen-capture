@@ -122,7 +122,7 @@ upload_and_clip() {
   local file="$1" label="$2"
   local url err
   say "$label" "Uploading…" 20000
-  if ! url=$(python3 "${SCRIPT_DIR}/capture-upload" "$file" 2>/tmp/capture-upload.err); then
+  if ! url=$("${SCRIPT_DIR}/capture-upload" "$file" 2>/tmp/capture-upload.err); then
     err=$(cat /tmp/capture-upload.err 2>/dev/null)
     say "$label" "Upload failed — ${err:-unknown error}" 8000
     return 1
@@ -134,7 +134,7 @@ upload_and_clip() {
 # ── stop panel ────────────────────────────────────────────────────────────────
 wait_for_stop() {
   sleep 0.4
-  python3 "${SCRIPT_DIR}/capture-stop" "$1"
+  "${SCRIPT_DIR}/capture-stop" "$1"
 }
 
 # ── smart slice ───────────────────────────────────────────────────────────────
@@ -591,7 +591,7 @@ case "${1:-}" in
   --import-config)    do_import_config "${2:-}";    exit 0 ;;
 esac
 
-result=$(python3 "${SCRIPT_DIR}/capture-region" 2>/dev/null) || true
+result=$("${SCRIPT_DIR}/capture-region" 2>/dev/null) || true
 [[ -z "$result" ]] && exit 0
 
 read -r action clipboard smart_slice threshold X Y W H <<< "$result"
