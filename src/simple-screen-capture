@@ -6,6 +6,13 @@ set -uo pipefail
 PLATFORM=$(uname -s)  # Darwin or Linux
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 
+# When invoked from Hammerspoon / Automator / Services, PATH is stripped down
+# and Homebrew-installed binaries (ffmpeg, terminal-notifier, optipng) are
+# invisible. Add the standard Homebrew locations so dependency checks pass.
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"
+fi
+
 if [[ "$PLATFORM" == "Linux" ]]; then
   export DISPLAY="${DISPLAY:-:0}"
   export XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
@@ -48,8 +55,15 @@ else
 fi
 
 # ── notify helper ─────────────────────────────────────────────────────────────
+# On macOS, banners are attributed to "Script Editor" / "Script Monitor"; enable
+# that bundle in System Settings → Notifications if the banners aren't visible.
+# Prefer terminal-notifier if installed (brew install terminal-notifier) —
+# it posts under its own bundle ID and is easier to grant permission to.
 say() {
   if [[ "$PLATFORM" == "Darwin" ]]; then
+    if command -v terminal-notifier &>/dev/null; then
+      terminal-notifier -title "$1" -message "$2" &>/dev/null && return
+    fi
     osascript -e "display notification \"$2\" with title \"$1\"" 2>/dev/null || true
   else
     command -v notify-send &>/dev/null && notify-send "$1" "$2" -t "${3:-3000}" || true
@@ -77,7 +91,7 @@ clip_image() {
 clip_base64() {
   local file="$1"
   if [[ "$PLATFORM" == "Darwin" ]]; then
-    base64 "$file" | pbcopy
+    base64 -i "$file" | pbcopy
   else
     base64 -w 0 "$file" | xclip -selection clipboard
   fi
@@ -189,17 +203,9 @@ do_screenshot() {
   cp "$tmp" "$out"
 
   case "$clipboard_mode" in
-    url)
-      upload_and_clip "$out" "Screenshot"
-      ;;
-    base64)
-      clip_base64 "$tmp"
-      say "Screenshot" "Base64 copied — ${comp}B (−${pct}%)"
-      ;;
-    *)
-      clip_image "$tmp"
-      say "Screenshot" "Image copied — ${comp}B (−${pct}%)"
-      ;;
+    url)    upload_and_clip "$out" "Screenshot" ;;
+    base64) clip_base64 "$tmp"; say "Screenshot" "Base64 copied — ${comp}B (−${pct}%)" ;;
+    *)      clip_image  "$tmp"; say "Screenshot" "Image copied — ${comp}B (−${pct}%)"  ;;
   esac
 }
 
@@ -591,7 +597,49 @@ case "${1:-}" in
   --import-config)    do_import_config "${2:-}";    exit 0 ;;
 esac
 
-result=$("${SCRIPT_DIR}/capture-region" 2>/dev/null) || true
+# Resolve clipboard mode from config. If unset, default to 'url' when S3 is
+# configured, else 'binary'. File is plain text: "url" | "binary" | "base64".
+get_clipboard_mode() {
+  local v
+  v=$(tr -d '[:space:]' < "$CONFIG_DIR/clipboard_mode" 2>/dev/null || true)
+  if [[ -z "$v" ]]; then
+    [[ -f "$CONFIG_DIR/s3.conf" ]] && v="url" || v="binary"
+  fi
+  case "$v" in url|binary|base64) echo "$v" ;; *) echo "binary" ;; esac
+}
+
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  # Use macOS's native selection UI (screencapture -i -s). Tk-based overlays
+  # have proved unreliable across Tk/macOS combinations — the native tool is
+  # pixel-perfect, always available, and behaves like Cmd+Shift+4.
+  clipboard_mode=$(get_clipboard_mode)
+  tmp=$(mktemp /tmp/capture-XXXXXX.png)
+  ts=$(date +%Y-%m-%d_%H-%M-%S)
+  out="$SCREENSHOTS_DIR/${ts}.png"
+
+  # -i interactive, -s drag-region only (no window picker), -x silent
+  screencapture -i -s -x "$tmp" 2>/dev/null
+  if [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"
+    exit 0
+  fi
+
+  orig=$(wc -c < "$tmp")
+  command -v optipng &>/dev/null && optipng -quiet -o2 "$tmp"
+  comp=$(wc -c < "$tmp")
+  pct=$(( (orig - comp) * 100 / orig ))
+  cp "$tmp" "$out"
+
+  case "$clipboard_mode" in
+    url)    upload_and_clip "$out" "Screenshot" ;;
+    base64) clip_base64 "$tmp"; say "Screenshot" "Base64 copied — ${comp}B (−${pct}%)" ;;
+    *)      clip_image  "$tmp"; say "Screenshot" "Image copied — ${comp}B (−${pct}%)"  ;;
+  esac
+  rm -f "$tmp"
+  exit 0
+fi
+
+result=$("${SCRIPT_DIR}/capture-region" 2>/tmp/capture-region.log) || true
 [[ -z "$result" ]] && exit 0
 
 read -r action clipboard smart_slice threshold X Y W H <<< "$result"

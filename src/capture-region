@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/opt/homebrew/bin/python3
 """Full-screen region selector with integrated capture menu.
 
 Click-and-drag to define region; drag inside to move; drag edges/corners to resize.
@@ -35,8 +35,11 @@ def _write(path, value):
     open(path, 'w').write(str(value))
 
 def get_clipboard_mode():
-    v = _read(CLIP_MODE_FILE, 'base64')
-    return v if v in ('base64', 'binary', 'url') else 'base64'
+    # Default to 'url' when S3 is configured, so new users get upload mode out of the box.
+    s3_configured = os.path.isfile(os.path.expanduser('~/.config/capture/s3.conf'))
+    default = 'url' if s3_configured else 'base64'
+    v = _read(CLIP_MODE_FILE, default)
+    return v if v in ('base64', 'binary', 'url') else default
 
 def get_smart_slice():
     return _read(SMART_SLICE_FILE, '0') == '1'
@@ -528,8 +531,7 @@ def run_mac():
             self._result        = None
 
             self._root = tk.Tk()
-            self._root.overrideredirect(True)
-            self._root.wm_attributes('-topmost', True)
+            self._root.withdraw()
 
             sw = self._root.winfo_screenwidth()
             sh = self._root.winfo_screenheight()
@@ -537,6 +539,8 @@ def run_mac():
             self.mon_x, self.mon_y = 0, 0
 
             self._root.geometry(f'{sw}x{sh}+0+0')
+            self._root.wm_attributes('-topmost', True)
+            self._root.overrideredirect(True)
 
             # Fake transparency using background screenshot
             self._bg_img = None
@@ -583,10 +587,23 @@ def run_mac():
             self._canvas.bind('<B1-Motion>',       self._on_motion)
             self._canvas.bind('<ButtonRelease-1>', self._on_release)
             self._canvas.bind('<Motion>',          self._on_hover)
-            self._root.bind('<Escape>', lambda e: self._cancel())
-            self._root.bind('<Return>', lambda e: self._confirm())
-            self._root.focus_force()
+            for widget in (self._root, self._canvas):
+                widget.bind('<Escape>', lambda e: self._cancel())
+                widget.bind('<Return>', lambda e: self._confirm())
+                widget.bind('<KP_Enter>', lambda e: self._confirm())
+            self._canvas.config(takefocus=True)
             self._redraw()
+
+            # Show the window as borderless. overrideredirect(True) alone is flaky on
+            # macOS Tk (often leaves a titlebar visible); the toggle forces Tk to
+            # re-assert the frameless style after the window is mapped.
+            self._root.update_idletasks()
+            self._root.deiconify()
+            self._root.overrideredirect(False)
+            self._root.overrideredirect(True)
+            self._root.lift()
+            self._root.focus_force()
+            self._canvas.focus_set()
 
         def _build_toolbar(self, tk):
             BG, ACCENT = '#181825', '#89b4fa'
@@ -594,19 +611,13 @@ def run_mac():
 
             tbw, tbh = 700, 52
             tx = max(0, (self.scr_w - tbw) // 2)
-            ty = self.scr_h - tbh - 24
+            # macOS Dock reserves ~80px at bottom (when visible); place toolbar above it.
+            ty = self.scr_h - tbh - 110
 
-            self._tb = tk.Toplevel(self._root)
-            self._tb.overrideredirect(True)
-            self._tb.wm_attributes('-topmost', True)
-            self._tb.geometry(f'{tbw}x{tbh}+{tx}+{ty}')
-            self._tb.configure(bg=BG)
-            self._tb.bind('<Escape>', lambda e: self._cancel())
-
-            # Border
-            bc = tk.Canvas(self._tb, bg=BG, highlightthickness=0)
-            bc.place(x=0, y=0, relwidth=1, relheight=1)
-            bc.create_rectangle(0, 0, tbw-1, tbh-1, outline='#313244', width=1)
+            self._tb = tk.Frame(self._root, bg=BG, highlightthickness=1,
+                                highlightbackground='#313244')
+            self._tb.place(x=tx, y=ty, width=tbw, height=tbh)
+            self._tb.lift()
 
             f = tk.Frame(self._tb, bg=BG)
             f.place(x=8, y=6, width=tbw-16, height=tbh-12)
@@ -771,6 +782,7 @@ def run_mac():
             except: pass
 
         def _on_press(self, event):
+            self._canvas.focus_set()
             x, y = event.x, event.y
             mode = self._hit_test(x, y)
             self.drag_origin = (x, y)
@@ -820,8 +832,10 @@ def run_mac():
             self._root.quit()
 
         def _confirm(self, *_):
+            if getattr(self, '_confirming', False):
+                return
+            self._confirming = True
             self._root.withdraw()
-            self._tb.withdraw()
             self._root.after(DELAY_MS, self._emit)
 
         def _emit(self):
